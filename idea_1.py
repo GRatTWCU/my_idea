@@ -107,7 +107,7 @@ def calculate_ade_fde(pred, gt):
 
 # --------------------- メイン ---------------------
 def main():
-    data_root = ".data/nuScenes-panoptic-v1.0-mini/v1.0-mini"  # ここは実際のパスに変更してください
+    data_root = "./data/nuScenes-panoptic-v1.0-mini/v1.0-mini"  # ここは実際のパスに変更してください
     nusc = NuScenes(version='v1.0-mini', dataroot=data_root, verbose=False)
     trajectories_np = get_pedestrian_trajectories(nusc, max_timesteps=8)
     if len(trajectories_np) == 0:
