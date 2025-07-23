@@ -4,6 +4,9 @@ import torch.nn.functional as F
 import numpy as np
 import os
 from torch.utils.data import Dataset, DataLoader
+import subprocess # subprocessモジュールを追加
+import sys # sysモジュールを追加 (argparseのため)
+import argparse # argparseモジュールを追加
 
 # --------------------- 環境特徴量抽出 ---------------------
 def extract_environment_features(lidar_points, trajectories):
@@ -373,6 +376,15 @@ def evaluate_model(model, dataloader, device):
 
 # --------------------- メイン ---------------------
 def main():
+    parser = argparse.ArgumentParser(description='Train and evaluate pedestrian trajectory predictor.')
+    parser.add_argument('--raw_nuscenes_path', type=str,
+                        default='./data/nuScenes_mini/nuScenes-panoptic-v1.0-mini',
+                        help='Path to the raw nuScenes dataset (parent directory of v1.0-mini). '
+                             'Used by complete_nuscenes_setup.py if data is not pre-processed.')
+    parser.add_argument('--mode', choices=['train', 'eval'], default='train',
+                        help='Run mode: train or eval (not fully implemented for eval only yet).')
+    args = parser.parse_args()
+
     # complete_nuscenes_setup.py で変換されたデータを使用します。
     # まず、complete_nuscenes_setup.py を --mode raw (または --mode dummy) で実行して、
     # './datasets/nuscenes_mini/train/', './datasets/nuscenes_mini/val/', './datasets/nuscenes_mini/test/'
@@ -382,6 +394,68 @@ def main():
     train_data_path = "./datasets/nuscenes_mini/train/"
     val_data_path = "./datasets/nuscenes_mini/val/" # 検証用データパスも追加
     
+    # データが存在するかチェックし、存在しない場合はセットアップスクリプトを実行
+    if not os.path.exists(train_data_path) or not os.listdir(train_data_path):
+        print(f"警告: 訓練データディレクトリ '{train_data_path}' が見つからないか、空です。")
+        print("complete_nuscenes_setup.py を実行してデータを準備します。")
+        
+        # complete_nuscenes_setup.py のパス
+        # idea_1.py と complete_nuscenes_setup.py が同じディレクトリにあることを想定
+        setup_script_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'complete_nuscenes_setup.py')
+        
+        # nuScenes-devkitがインストールされているかチェック (rawモードの場合のみ必要)
+        try:
+            import nuscenes
+            nuscenes_installed = True
+        except ImportError:
+            nuscenes_installed = False
+
+        if not nuscenes_installed:
+            print("警告: 'nuscenes-devkit' がインストールされていません。")
+            print("生データからの変換には必要です。ダミーデータを作成します。")
+            setup_mode = 'dummy'
+            setup_input_path = '' # ダミーモードではinput_pathは不要
+        else:
+            setup_mode = 'raw'
+            setup_input_path = args.raw_nuscenes_path # コマンドライン引数からパスを取得
+        
+        # サブプロセスとしてcomplete_nuscenes_setup.pyを実行
+        try:
+            command = [
+                sys.executable, # 現在のPythonインタープリタを使用
+                setup_script_path,
+                '--mode', setup_mode,
+                '--input_path', setup_input_path,
+                '--output_path', './datasets/nuscenes_mini/'
+            ]
+            print(f"実行コマンド: {' '.join(command)}")
+            # check=True で、サブプロセスがエラーコードで終了した場合に CalledProcessError を発生させる
+            # capture_output=True で標準出力と標準エラーをキャプチャ
+            result = subprocess.run(command, check=True, capture_output=True, text=True)
+            print("complete_nuscenes_setup.py の標準出力:")
+            print(result.stdout)
+            if result.stderr:
+                print("complete_nuscenes_setup.py の標準エラー出力:")
+                print(result.stderr)
+            print("データセットのセットアップが完了しました。")
+            
+            # セットアップ後にデータが生成されたか再確認
+            if not os.path.exists(train_data_path) or not os.listdir(train_data_path):
+                print(f"エラー: complete_nuscenes_setup.py 実行後も訓練データディレクトリ '{train_data_path}' が見つからないか、空です。")
+                print("データセットのセットアップが正しく行われなかった可能性があります。")
+                return # 処理を中断
+
+        except subprocess.CalledProcessError as e:
+            print(f"エラー: complete_nuscenes_setup.py の実行に失敗しました。")
+            print(f"終了コード: {e.returncode}")
+            print(f"標準出力:\n{e.stdout}")
+            print(f"標準エラー:\n{e.stderr}")
+            return # 処理を中断
+        except FileNotFoundError:
+            print(f"エラー: complete_nuscenes_setup.py が見つかりません。パスを確認してください: {setup_script_path}")
+            print("idea_1.py と complete_nuscenes_setup.py が同じディレクトリにあることを確認してください。")
+            return # 処理を中断
+
     # 観測ステップ数 (過去の軌跡の長さ) と予測ステップ数 (未来の軌跡の長さ) を定義
     # このモデルは単ステップ予測のため、pred_lenは1に設定します。
     obs_len = 4 
